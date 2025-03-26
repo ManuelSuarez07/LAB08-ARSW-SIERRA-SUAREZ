@@ -8,14 +8,21 @@ var app = (function () {
     }
 
     var stompClient = null;
-    var canvas; // Variable global para el canvas
-    var ctx;    // Variable global para el contexto
+    var canvas;
+    var ctx;
+    var currentDrawingId = null;
 
     var addPointToCanvas = function (point) {
         ctx.beginPath();
         ctx.arc(point.x, point.y, 3, 0, 2 * Math.PI);
-        ctx.fillStyle = '#000000'; // Color negro para los puntos
+        ctx.fillStyle = getRandomColor();
         ctx.fill();
+    };
+
+    // Función para generar colores aleatorios para cada dibujo
+    var getRandomColor = function() {
+        var colors = ['#FF0000', '#00FF00', '#0000FF', '#FFFF00', '#FF00FF', '#00FFFF'];
+        return colors[Math.floor(Math.random() * colors.length)];
     };
 
     var getMousePosition = function (evt) {
@@ -26,55 +33,68 @@ var app = (function () {
         };
     };
 
-    var connectAndSubscribe = function () {
-        console.info('Connecting to WS...');
+    var connectAndSubscribe = function (drawingId) {
+        console.info('Connecting to WS for drawing ' + drawingId + '...');
         var socket = new SockJS('/stompendpoint');
         stompClient = Stomp.over(socket);
 
         stompClient.connect({}, function (frame) {
             console.log('Connected: ' + frame);
-            // Suscripción al tópico donde se publicarán los puntos
-            stompClient.subscribe('/topic/newpoint', function (message) {
+            currentDrawingId = drawingId;
+
+            // Suscribirse al tópico específico para este dibujo
+            stompClient.subscribe('/topic/newpoint.' + drawingId, function (message) {
                 var point = JSON.parse(message.body);
                 addPointToCanvas(point);
             });
+
+            alert("Conectado al dibujo: " + drawingId);
         });
     };
 
     return {
         init: function () {
-            // Obtener el canvas y su contexto
             canvas = document.getElementById("canvas");
             ctx = canvas.getContext("2d");
-
-            // Configurar el canvas para dibujo
             ctx.lineWidth = 2;
-            ctx.strokeStyle = '#000000';
 
-            // Evento para dibujar al hacer clic
+            // Configurar evento de clic (pero no conecta automáticamente)
             canvas.addEventListener("click", function(event) {
-                var point = getMousePosition(event);
-                app.publishPoint(point.x, point.y);
+                if (stompClient && stompClient.connected && currentDrawingId) {
+                    var point = getMousePosition(event);
+                    app.publishPoint(point.x, point.y);
+                } else {
+                    alert("Por favor conéctese a un dibujo primero");
+                }
             });
+        },
 
-            // Conectar al WebSocket
-            connectAndSubscribe();
+        connect: function () {
+            var drawingId = document.getElementById("drawingId").value;
+            if (!drawingId) {
+                alert("Por favor ingrese un ID de dibujo");
+                return;
+            }
+
+            if (stompClient && stompClient.connected) {
+                app.disconnect();
+            }
+
+            connectAndSubscribe(drawingId);
         },
 
         publishPoint: function(px, py) {
             var pt = new Point(px, py);
-            console.info("Publishing point at " + JSON.stringify(pt));
+            console.info("Publishing point at " + JSON.stringify(pt) + " to drawing " + currentDrawingId);
 
-            // Dibujar el punto localmente
             addPointToCanvas(pt);
-
-            // Publicar el punto al servidor
-            stompClient.send("/app/newpoint", {}, JSON.stringify(pt));
+            stompClient.send("/app/newpoint." + currentDrawingId, {}, JSON.stringify(pt));
         },
 
         disconnect: function () {
             if (stompClient !== null) {
                 stompClient.disconnect();
+                currentDrawingId = null;
             }
             console.log("Disconnected");
         }
